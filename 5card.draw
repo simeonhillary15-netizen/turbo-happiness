@@ -1,0 +1,265 @@
+const express = require("express");
+const cors = require("cors");
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// ---------------- DATABASE ----------------
+let users = {};
+
+// ---------------- SUBMIT GAME ----------------
+app.post("/submit", (req, res) => {
+  const { username, total } = req.body;
+
+  if (!users[username]) {
+    users[username] = {
+      username,
+      today: 0,
+      month: 0,
+      lastPlayed: ""
+    };
+  }
+
+  let today = new Date().toDateString();
+
+  // ONE PLAY PER DAY RULE
+  if (users[username].lastPlayed === today) {
+    return res.json({ error: "Already played today" });
+  }
+
+  users[username].today = total;
+  users[username].month += total;
+  users[username].lastPlayed = today;
+
+  res.json({ success: true, total });
+});
+
+// ---------------- LEADERBOARDS ----------------
+app.get("/leaderboard", (req, res) => {
+  let sorted = Object.values(users).sort((a,b)=>b.today - a.today);
+  res.json(sorted);
+});
+
+app.get("/monthly", (req, res) => {
+  let sorted = Object.values(users).sort((a,b)=>b.month - a.month);
+  res.json(sorted);
+});
+
+// ---------------- START SERVER ----------------
+app.listen(3000, () => {
+  console.log("🔥 5Card Draw server running on port 3000");
+});
+<!DOCTYPE html>
+<html>
+<head>
+  <title>5Card Draw</title>
+
+  <style>
+    body {
+      font-family: Arial;
+      background: #0d1117;
+      color: white;
+      text-align: center;
+    }
+
+    h1 { color: gold; }
+
+    .card {
+      display: inline-block;
+      background: #161b22;
+      padding: 15px;
+      margin: 10px;
+      border-radius: 12px;
+      cursor: pointer;
+    }
+
+    .selected {
+      border: 3px solid lime;
+    }
+
+    button {
+      padding: 10px 20px;
+      margin: 10px;
+      background: gold;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+
+<body>
+
+<h1>🔥 5Card Draw</h1>
+<p id="status"></p>
+
+<div id="game"></div>
+
+<button onclick="submitTeam()">Submit Picks</button>
+
+<h2 id="result"></h2>
+
+<hr>
+
+<button onclick="loadDaily()">Daily Leaderboard</button>
+<button onclick="loadMonthly()">Monthly Leaderboard</button>
+
+<div id="leaderboard"></div>
+
+<script>
+
+// ---------------- SETTINGS ----------------
+const OPEN_HOUR = 19;
+const OPEN_MINUTE = 30;
+
+// ---------------- PLAYERS ----------------
+let players = [
+  "LeBron James","Stephen Curry","Kevin Durant",
+  "Luka Doncic","Jayson Tatum",
+  "Giannis Antetokounmpo","Devin Booker","Ja Morant"
+];
+
+let todaysPlayers = [];
+let selected = [];
+
+// ---------------- TIME CHECK ----------------
+function isOpen(){
+  let now = new Date();
+  return (now.getHours() > OPEN_HOUR ||
+         (now.getHours() === OPEN_HOUR && now.getMinutes() >= OPEN_MINUTE));
+}
+
+// ---------------- LOAD GAME ----------------
+function loadGame(){
+
+  if(!isOpen()){
+    document.getElementById("status").innerText =
+      "⏳ Locked until 7:30 PM";
+    return;
+  }
+
+  document.getElementById("status").innerText =
+    "Pick 3 players";
+
+  todaysPlayers = [...players]
+    .sort(()=>0.5-Math.random())
+    .slice(0,5);
+
+  let game = document.getElementById("game");
+  game.innerHTML = "";
+
+  todaysPlayers.forEach((p,i)=>{
+    let div = document.createElement("div");
+    div.className = "card";
+    div.innerHTML = `<h3>${p}</h3>`;
+    div.onclick = ()=>select(div,i);
+    game.appendChild(div);
+  });
+}
+
+// ---------------- SELECT ----------------
+function select(div,i){
+  if(selected.includes(i)){
+    selected = selected.filter(x=>x!==i);
+    div.classList.remove("selected");
+  } else {
+    if(selected.length >= 3){
+      alert("Pick only 3!");
+      return;
+    }
+    selected.push(i);
+    div.classList.add("selected");
+  }
+}
+
+// ---------------- REAL NBA STATS ----------------
+async function getPlayerPoints(name){
+  try {
+    let res = await fetch(`https://www.balldontlie.io/api/v1/players?search=${name}`);
+    let data = await res.json();
+
+    if(!data.data.length) return 0;
+
+    let id = data.data[0].id;
+
+    let today = new Date().toISOString().split("T")[0];
+
+    let stats = await fetch(
+      `https://www.balldontlie.io/api/v1/stats?player_ids[]=${id}&dates[]=${today}`
+    );
+
+    let s = await stats.json();
+
+    if(!s.data.length) return 0;
+
+    return s.data[0].pts || 0;
+
+  } catch(e){
+    return 0;
+  }
+}
+
+// ---------------- SUBMIT GAME ----------------
+async function submitTeam(){
+
+  if(!isOpen()){
+    alert("Not open yet!");
+    return;
+  }
+
+  if(selected.length !== 3){
+    alert("Pick 3 players!");
+    return;
+  }
+
+  let username = prompt("Enter username:");
+
+  let total = 0;
+
+  for(let i of selected){
+    total += await getPlayerPoints(todaysPlayers[i]);
+  }
+
+  let res = await fetch("http://localhost:3000/submit", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ username, total })
+  });
+
+  let data = await res.json();
+
+  document.getElementById("result").innerText =
+    "🔥 You scored " + total + " REAL points!";
+}
+
+// ---------------- LEADERBOARDS ----------------
+async function loadDaily(){
+  let res = await fetch("http://localhost:3000/leaderboard");
+  let data = await res.json();
+
+  render(data, "Daily Leaderboard");
+}
+
+async function loadMonthly(){
+  let res = await fetch("http://localhost:3000/monthly");
+  let data = await res.json();
+
+  render(data, "Monthly Leaderboard");
+}
+
+function render(data,title){
+  document.getElementById("leaderboard").innerHTML =
+    `<h3>${title}</h3>` +
+    data.map((u,i)=>
+      `<p>${i+1}. ${u.username} - ${u.today || u.month}</p>`
+    ).join("");
+}
+
+// ---------------- START ----------------
+loadGame();
+
+</script>
+ty
+</body>
+</html>
